@@ -75,10 +75,12 @@
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros" />
   <ItemGroup>
+    <ClCompile Include="HTTP_Parser.c" />
     <ClCompile Include="Server.c" />
     <ClCompile Include="main.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="HTTP_Parse.h" />
     <ClInclude Include="Server.h" />
   </ItemGroup>
   <ItemDefinitionGroup />

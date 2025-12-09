@@ -1,8 +1,8 @@
 #ifndef Server_H
 #define Server_H
 
-#include<sys/socket.h> // domain macros, service macros
-#include<netinet/in.h> // protocol macros, interface address macros
+#include <sys/socket.h> // domain macros, service macros
+#include <netinet/in.h> // protocol macros, interface address macros
 
 /*
 * @brief Represents a server configuration
@@ -47,5 +47,7 @@ Server serverConstructor(int domain,
     int port,
     int backlog,
     void (*launch)(struct Server*));
+
+void launch(Server* server);
 
 #endif
