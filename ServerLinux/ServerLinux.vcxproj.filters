@@ -3,11 +3,11 @@
   <ItemGroup>
     <ClCompile Include="Server.c" />
     <ClCompile Include="main.c" />
-    <ClCompile Include="HTTP_Parser.c" />
+    <ClCompile Include="HTTP_PARSER.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Server.h" />
-    <ClInclude Include="HTTP_Parse.h">
+    <ClInclude Include="HTTP_PARSER.h">
       <Filter>HTTP</Filter>
     </ClInclude>
   </ItemGroup>
