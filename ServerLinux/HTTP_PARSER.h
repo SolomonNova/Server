@@ -1,3 +1,9 @@
+/*
+    File name: HTTP_PARSER.h
+    Creation date: 10-12-25
+    Author: Solomon
+*/
+
 #ifndef HTTP_PARSER_H
 #define HTTP_PARSER_H
 
@@ -19,7 +25,6 @@ typedef struct Request
 char** parseMethod(const char* request);
 Headers* parseHeaders(const char* request);
 char* parseBody(const char* s, Request* request);
-char* parseChunckedBody(char* s);
 
 //============Helper Functions================//
 
@@ -44,5 +49,6 @@ char* getValue(const char* s, Headers* headers);
     Gets the value corrosponding the key string s
 */
 
+char* parseChunckedBody(const char* s, int startIndex);
 
 #endif

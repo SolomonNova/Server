@@ -11,6 +11,7 @@
 #include <stdio.h> // perror()
 #include <unistd.h> // close(fd), fork()
 #include "Server.h"
+#include "HTTP_PARSER.h"
 
 Server serverConstructor(int domain,
     int service,
@@ -89,8 +90,22 @@ void launch(Server* server)
             {
                 buffer[bytesRecieved] = '\0';
                 printf("%s\n", buffer);
-                printf("%d process\n", i + 1);
                 i++;
+
+                char** method = parseMethod(buffer);
+
+                for (int x = 0; method[x] != NULL; x++)
+                {
+                    printf("%s\n", method[x]);
+                }
+
+                Headers* headers = parseHeaders(buffer);
+
+                for (int x = 0; headers->keys[x] != NULL; x++)
+                {
+                    printf("%s: ", headers->keys[x]);
+                    printf("%s\n", headers->values[hashFunction(headers->keys[x])]);
+                }
             }
 
             char* response = "HTTP/1.1 200 OK\r\n"
