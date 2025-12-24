@@ -3,17 +3,30 @@
   <ItemGroup>
     <ClCompile Include="Server.c" />
     <ClCompile Include="main.c" />
-    <ClCompile Include="HTTP_PARSER.c" />
+    <ClCompile Include="StaticFiles.c" />
+    <ClCompile Include="HTTP_PARSER.c">
+      <Filter>HTTP</Filter>
+    </ClCompile>
+    <ClCompile Include="Stack.c">
+      <Filter>Data Structures</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Server.h" />
     <ClInclude Include="HTTP_PARSER.h">
       <Filter>HTTP</Filter>
     </ClInclude>
+    <ClInclude Include="StaticFiles.h" />
+    <ClInclude Include="Stack.h">
+      <Filter>Data Structures</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="HTTP">
       <UniqueIdentifier>{8c306376-1cd5-429f-8b1f-e24f7436417a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Data Structures">
+      <UniqueIdentifier>{fc2cc98b-8b0c-49c6-b4fd-5f66fd526c5d}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

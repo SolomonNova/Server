@@ -78,10 +78,14 @@
     <ClCompile Include="HTTP_PARSER.c" />
     <ClCompile Include="Server.c" />
     <ClCompile Include="main.c" />
+    <ClCompile Include="Stack.c" />
+    <ClCompile Include="StaticFiles.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="HTTP_PARSER.h" />
     <ClInclude Include="Server.h" />
+    <ClInclude Include="Stack.h" />
+    <ClInclude Include="StaticFiles.h" />
   </ItemGroup>
   <ItemDefinitionGroup />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
