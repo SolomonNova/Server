@@ -1,13 +1,29 @@
+/*
+    File name: Stack.c
+    Created at: 22-12-25
+    Author: Solomon
+*/
+
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include "Stack.h"
 
 /////////////////////////////////////////
 /////////////////////////////////////////
+bool isEmpty(Stack* s)
+{
+    if (!s) return true;
+    if (!s->top) return true;
+
+    return false;
+}
+/////////////////////////////////////////
+/////////////////////////////////////////
 bool initialize(Stack* s, size_t capacity, size_t elementSize)
 {
+    if (!s || capacity == 0 || elementSize == 0) return false;
+
     s->top = 0;
     s->capacity = capacity;
     s->elementSize = elementSize;
@@ -22,8 +38,9 @@ bool initialize(Stack* s, size_t capacity, size_t elementSize)
 bool resizeStack(Stack* s, size_t sizeMultiplier)
 {
     s->capacity = s->capacity * sizeMultiplier;
-    s->array = realloc(s->array, s->capacity);
-    if (s->array == NULL) return false;
+    void* temp = realloc(s->array, s->capacity * s->elementSize);
+    if (temp == NULL) return false;
+    s->array = temp;
 
     return true;
 }
@@ -32,27 +49,40 @@ bool resizeStack(Stack* s, size_t sizeMultiplier)
 /////////////////////////////////////////
 bool push(Stack* s, void* value)
 {
-    if (s->top == s->capacity - 1)
-        if (resizeStack(s, 2)) return false;
+    if (!s || !value) return false;
 
-    void* base = s->array;
-    base + (s->top + 1) * s->elementSize = value;
+    if (s->top == s->capacity)
+        if (!resizeStack(s, 2)) return false;
 
-    // yet to be completed
+    char* base = (char*)s->array;
+    memcpy(base + s->top * s->elementSize, value, s->elementSize);
+    s->top++;
+
+    return true;
 }
 
-int main()
+/////////////////////////////////////////
+/////////////////////////////////////////
+void* pop(Stack* s)
 {
-    Stack s;
-    bool isInitialized = initialize(&s, 10, 4);
+    if (!s) return NULL;
+    if (!s->top) return NULL;
 
-    printf("stack capacity before: %zu\n", s.capacity);
+    char* base = (char*)s->array;
+    void* element = calloc(1, s->elementSize);
+    if (!element) return NULL;
+    memcpy(element, base + (s->top - 1) * s->elementSize, s->elementSize);
+    s->top--;
 
-    bool resized = resizeStack(&s, 2);
-    printf("resize status: %s\n", resized ? "true" : "false");
-    printf("stack capacity after: %zu\n", s.capacity);
-
-
-
-    return 0;
+    return element;
 }
+
+/////////////////////////////////////////
+/////////////////////////////////////////
+void destroy(Stack* s)
+{
+    free(s->array);
+    s->array = NULL;
+    s->capacity = s->top = s->elementSize = 0;
+}
+
