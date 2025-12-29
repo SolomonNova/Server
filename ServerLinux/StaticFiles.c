@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <stdbool.h>
 #include "StaticFiles.h"
+#include "Data Structures/Stack.h"
 
 #define ROOT "./www"
 
@@ -201,49 +202,173 @@ const char* getMIMEType(const char* filePath)
     return "application/octet-stream";
 }
 
+/////////////////////////////////////////
+/////////////////////////////////////////
 bool isSafePath(const char* URL)
 {
+    /*
+    This function is designed to safely validate and prepare a URL path
+    before it is mapped to a filesystem location. Its responsibilities are:
+
+    - Verify the URL pointer is valid and the path is absolute (starts with '/')
+    - Reject platform-specific path separators that could bypass checks ('\')
+    - Reject ASCII control characters and other non-printable bytes (0x00–0x1F and 0x7F)
+    - Decode percent-encoded characters (%XX) exactly once
+    - Reject malformed or partial percent-encoding sequences
+    - Ensure the decoded path remains well-formed after decoding
+    - Normalize the path using stack-based segment processing
+        * Ignore "." segments
+        * Resolve ".." by popping the previous segment
+        * Reject attempts to escape the root directory
+        * Reject empty segments caused by "//"
+    - Reconstruct a canonical, normalized path string
+    - Merge the normalized path with a fixed base directory
+    - Resolve the final filesystem path using realpath()
+    - Verify the resolved path is contained within the base directory
+    - Reject the path if any validation or containment rule is violated
+
+    Only paths that pass all these stages are considered safe for file access.
+    */
+
+    //============================================================================//
+
+    // path must start with '/'
     if (URL == NULL) return false;
     if (URL[0] != '/') return false;
 
-    unsigned short len = strlen(URL);
-    char* buffer = (char*)calloc(len, sizeof(char));
-    int i = 0; // the index used to fill the buffer
+    size_t len = strlen(URL);
 
-    for (int x = 0; x < len; x++)
+    char* buffer = (char*)calloc(len + 1, 1);
+    if (buffer == NULL) return false;
+
+    size_t i = 0; // index used to fill decoded buffer
+
+
+    //decode percent-encoded characters + basic checks
+    for (size_t x = 0; x < len; x++)
     {
-        if (URL[x] == '\\') return false; // windows convention is invalid
-        if (URL[x] < 0x20 || URL[x] == 0x7F) return false;
+        // windows URL not allowed
+        if (URL[x] == '\\') { free(buffer); return false; }
 
-        // decoding endoced characters
-        if (URL[x] == '%' && (x + 2 < len) && isHex(URL[x + 1]) && isHex(URL[x + 2]))
+        // reject control characters
+        if ((unsigned char)URL[x] < 0x20 || URL[x] == 0x7F)
         {
-            unsigned short encodedDigit = 16 * URL[x + 1] + URL[x + 2];
-            buffer[i] = encodedDigit;
-            x += 3;
+            free(buffer);
+            return false;
+        }
+
+        // decode %XX
+        if (URL[x] == '%' && (x + 2 < len) &&
+            isHex(URL[x + 1]) && isHex(URL[x + 2]))
+        {
+            unsigned char hi = isHex(URL[x + 1]);
+            unsigned char lo = isHex(URL[x + 2]);
+            buffer[i++] = (hi << 4) | lo;
+
+            x += 2;
             continue;
         }
 
-        // malformed encoding
-        if (URL[x] == '%') return false;
+        // malformed percent encoding
+        if (URL[x] == '%')
+        {
+            free(buffer);
+            return false;
+        }
 
-        i++;
-        buffer[i] = URL[x];
-
+        // fill the buffer
+        buffer[i++] = URL[x];
     }
 
-    if (buffer == NULL) return false;
-    if (buffer[0] != '/') return false;
-    unsigned short bufferLen = strlen(buffer);
+    buffer[i] = '\0';
+    size_t bufferLen = i;
 
+    // checks on decoded path (pre-normalization only)
+    if (buffer[0] != '/') { free(buffer); return false; }
 
-    for (int x = 0; x < bufferLen; x++)
+    for (size_t x = 0; x < bufferLen; x++)
     {
-        if (buffer[x] == '\\') return false;
-        if (buffer[x] + 2 < bufferLen && buffer[i] == '.' && buffer[i + 1] == '.' && buffer[i + 2] == '/') return false;
+        if (buffer[x] == '\\') { free(buffer); return false; }
+
+        if (buffer[x] == '/' && x + 1 < bufferLen && buffer[x + 1] == '/')
+        {
+            free(buffer);
+            return false;
+        }
     }
 
-    // to be finished, a stack is needed to normalize the URL path
+    /* ------------------------------------------------ */
+    /* TODO:
+       - Normalize path using stack-based segment handling
+       - Reject empty segments (//)
+       - Handle "." and ".." correctly
+       - Rebuild normalized path
+       - Merge with base directory
+       - realpath() resolution
+       - Verify resolved path stays inside base directory
+    */
+    /* ------------------------------------------------ */
+
+
+
+    free(buffer);
+    return true;
+}
+
+/////////////////////////////////////////
+/////////////////////////////////////////
+char* normalizePath(char* path)
+{
+    Stack stack;
+    initialize(&stack, 20, sizeof(char*));
+
+    char* token = strtok(path, "/");
+
+    while (token != NULL)
+    {
+        if (strcmp(token, ".") == 0)
+        {
+            token = strtok(NULL, "/");
+            continue;
+        }
+
+        if (strcmp(token, "..") == 0)
+        {
+            if (isEmpty(&stack))
+                return NULL; // escape root ? reject
+
+            pop(&stack);
+            token = strtok(NULL, "/");
+            continue;
+        }
+
+        push(&stack, token);
+        token = strtok(NULL, "/");
+    }
+
+    free(path);
+    // reconstruction of the path
+
+    char** items = (char**)stack.array;
+    size_t total = 1; // leading '/'
+
+    for (size_t x = 0; x < stack.top; x++)
+    {
+        total += strlen(items[x]) + 1;
+    }
+
+    char* buffer = (char*)calloc(total, sizeof(char));
+    if (buffer == NULL) return NULL;
+    buffer[0] = '/';
+    unsigned i = 1;
+
+    for (int x = 0; x < total; x++)
+    {
+        strcpy(buffer, items[x]);
+        i += strlen(x);
+        buffer[i++] = '/';
+        // to be finished
+    }
 
 }
 
@@ -253,4 +378,13 @@ bool isHex(char c)
 {
     if (c >= '0' && c <= '9' || c >= 'A' && c <= 'F' || c >= 'a' && c <= 'f') return true;
     return false;
+}
+
+/////////////////////////////////////////
+/////////////////////////////////////////
+int main()
+{
+    bool safe = isSafePath("/images/icons/../home.png");
+    printf("Safe: %s\n", safe ? "yes" : "no");
+    return 0;
 }
