@@ -4,387 +4,573 @@
     Author: Solomon
 */
 
+#include <fcntl.h>        // open(), O_RDONLY
+#include <unistd.h>       // close(), read(), write()
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <stdbool.h>
+#include <linux/limits.h> // PATH_MAX
+#include <errno.h>
+#include <inttypes.h>
+
 #include "StaticFiles.h"
 #include "Data Structures/Stack.h"
 
 #define ROOT "./www"
+#define ROOT_LENGTH 5
 
-void serverFile(const char* URL)
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+void serverFile(const char* szURL, int socketFd)
 {
-    if (!isSafePath(URL)) return;
+    /*
+        Entry point for serving a static file over a socket
+        Coordinates path validation, access checks, and streaming
+    */
 
-    char* filePath = URLToFilePath(URL);
-    FileStats fs = getFileStats(filePath);
-    printFileStats(&fs);
+    if (!isSafePath(szURL)) return;
+
+    char* szBuffer = URLToFilePath(szURL);
+    if (!szBuffer) return;
+
+    struct stat stStat;
+    int iStatus = validateFileAccess(szBuffer, &stStat);
+    if (iStatus != 200)
+    {
+        sendErrorResponse(socketFd, iStatus);
+        free(szBuffer);
+        return;
+    }
+
+    int iFileFd = openFileReadOnly(szBuffer);
+    if (iFileFd < 0)
+    {
+        sendErrorResponse(socketFd, 500);
+        free(szBuffer);
+        return;
+    }
+
+    if (!sendFileToSocket(socketFd, iFileFd, stStat.st_size))
+        sendErrorResponse(socketFd, 500);
+
+    close(iFileFd);
+    free(szBuffer);
 }
 
-/////////////////////////////////////////
-/////////////////////////////////////////
-char* URLToFilePath(const char* URL)
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+char* URLToFilePath(const char* szURL)
 {
-    if (strcmp(URL, "/") == 0)
-        URL = "/index.html";
+    /*
+        Converts a URL path into a filesystem path under ROOT
+        Dynamically allocates and resizes buffer as needed
+    */
 
-    size_t rootLen = strlen(ROOT);
-    size_t urlLen = strlen(URL);
-    size_t bufferSize = 128;
+    if (strcmp(szURL, "/") == 0)
+        szURL = "/index.html";
 
-    char* buffer = calloc(bufferSize, 1);
-    if (!buffer) return NULL;
+    size_t iRootLen = strlen(ROOT);
+    size_t iURLLen = strlen(szURL);
+    size_t iBufferSize = 128;
 
-    while (rootLen + urlLen + 1 > bufferSize)
+    char* szBuffer = calloc(iBufferSize, 1);
+    if (!szBuffer) return NULL;
+
+    while (iRootLen + iURLLen + 1 > iBufferSize)
     {
-        bufferSize *= 2;
-        char* temp = realloc(buffer, bufferSize);
-        if (!temp)
+        iBufferSize *= 2;
+        char* szTemp = realloc(szBuffer, iBufferSize);
+        if (!szTemp)
         {
-            free(buffer);
+            free(szBuffer);
             return NULL;
         }
-
-        buffer = temp;
+        szBuffer = szTemp;
     }
 
-    strcpy(buffer, ROOT);
-    strcat(buffer, URL);
+    strcpy(szBuffer, ROOT);
+    strcat(szBuffer, szURL);
 
-    return buffer;
+    return szBuffer;
 }
 
-/////////////////////////////////////////
-/////////////////////////////////////////
-FileStats getFileStats(const char* filePath)
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+FileStats getFileStats(const char* szFilePath)
 {
-    FileStats fs = { 0 };
-    struct stat s;
+    /*
+        Collects metadata about a file using stat()
+        Populates a FileStats structure with permission and type info
+    */
 
-    if (stat(filePath, &s) != 0)
-    {
-        return fs;
-    }
+    FileStats fsStats = { 0 };
+    struct stat stStat;
 
-    fs.isRegular = S_ISREG(s.st_mode);
-    fs.isDirectory = S_ISDIR(s.st_mode);
-    fs.isSymLink = S_ISLNK(s.st_mode);
+    if (stat(szFilePath, &stStat) != 0)
+        return fsStats;
 
-    fs.canRead = (s.st_mode & S_IRUSR) != 0;
-    fs.canWrite = (s.st_mode & S_IWUSR) != 0;
-    fs.canExecute = (s.st_mode & S_IXUSR) != 0;
+    fsStats.isRegular = S_ISREG(stStat.st_mode);
+    fsStats.isDirectory = S_ISDIR(stStat.st_mode);
+    fsStats.isSymLink = S_ISLNK(stStat.st_mode);
 
-    fs.size = s.st_size;
-    fs.owner = s.st_uid;
-    fs.group = s.st_gid;
+    fsStats.canRead = (stStat.st_mode & S_IRUSR) != 0;
+    fsStats.canWrite = (stStat.st_mode & S_IWUSR) != 0;
+    fsStats.canExecute = (stStat.st_mode & S_IXUSR) != 0;
 
-    return fs;
+    fsStats.size = stStat.st_size;
+    fsStats.owner = stStat.st_uid;
+    fsStats.group = stStat.st_gid;
+
+    return fsStats;
 }
 
-////////////////////////////////////////
-/////////////////////////////////////////
-void printFileStats(const FileStats* fs)
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+void printFileStats(const FileStats* pStats)
 {
+    /*
+        Debug helper to print file metadata to stdout
+        Used during development and verification only
+    */
+
     printf("File type:\n");
-    printf("  Regular file : %s\n", fs->isRegular ? "yes" : "no");
-    printf("  Directory    : %s\n", fs->isDirectory ? "yes" : "no");
-    printf("  Symbolic link: %s\n", fs->isSymLink ? "yes" : "no");
+    printf("  Regular file : %s\n", pStats->isRegular ? "yes" : "no");
+    printf("  Directory    : %s\n", pStats->isDirectory ? "yes" : "no");
+    printf("  Symbolic link: %s\n", pStats->isSymLink ? "yes" : "no");
 
     printf("\nPermissions (owner):\n");
-    printf("  Read    : %s\n", fs->canRead ? "yes" : "no");
-    printf("  Write   : %s\n", fs->canWrite ? "yes" : "no");
-    printf("  Execute : %s\n", fs->canExecute ? "yes" : "no");
+    printf("  Read    : %s\n", pStats->canRead ? "yes" : "no");
+    printf("  Write   : %s\n", pStats->canWrite ? "yes" : "no");
+    printf("  Execute : %s\n", pStats->canExecute ? "yes" : "no");
 
     printf("\nMetadata:\n");
-    printf("  Size    : %ld bytes\n", (long)fs->size);
-    printf("  Owner   : UID %u\n", fs->owner);
-    printf("  Group   : GID %u\n", fs->group);
+    printf("  Size    : %ld bytes\n", (long)pStats->size);
+    printf("  Owner   : UID %u\n", pStats->owner);
+    printf("  Group   : GID %u\n", pStats->group);
 }
 
-/////////////////////////////////////////
-/////////////////////////////////////////
-const char* getMIMEType(const char* filePath)
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+const char* getMIMEType(const char* szFilePath)
 {
-    int dotIndex = -1;
-    int len = strlen(filePath);
+    /*
+        Determines MIME type based on file extension
+        Returns static string literals for HTTP headers
+    */
 
-    for (int x = len - 1; x >= 0; x--)
+    int iDotIndex = -1;
+    int iLen = strlen(szFilePath);
+
+    for (int iX = iLen - 1; iX >= 0; iX--)
     {
-        if (filePath[x] == '.')
+        if (szFilePath[iX] == '.')
         {
-            dotIndex = x;
+            iDotIndex = iX;
             break;
         }
     }
 
-    if (dotIndex == -1)
+    if (iDotIndex == -1)
         return "application/octet-stream";
 
-    int extLen = len - dotIndex - 1;
-    if (extLen <= 0)
+    int iExtLen = iLen - iDotIndex - 1;
+    if (iExtLen <= 0)
         return "application/octet-stream";
 
-    char* ext = calloc(extLen + 1, 1);
-    if (!ext)
+    char* szExt = calloc(iExtLen + 1, 1);
+    if (!szExt)
         return "application/octet-stream";
 
-    memcpy(ext, filePath + dotIndex + 1, extLen);
+    memcpy(szExt, szFilePath + iDotIndex + 1, iExtLen);
 
-    if (strcmp(ext, "html") == 0 || strcmp(ext, "htm") == 0)
+    if (strcmp(szExt, "html") == 0 || strcmp(szExt, "htm") == 0)
     {
-        free(ext);
+        free(szExt);
         return "text/html";
     }
-
-    if (strcmp(ext, "css") == 0)
+    if (strcmp(szExt, "css") == 0)
     {
-        free(ext);
+        free(szExt);
         return "text/css";
     }
-
-    if (strcmp(ext, "js") == 0)
+    if (strcmp(szExt, "js") == 0)
     {
-        free(ext);
+        free(szExt);
         return "application/javascript";
     }
-
-    if (strcmp(ext, "png") == 0)
+    if (strcmp(szExt, "png") == 0)
     {
-        free(ext);
+        free(szExt);
         return "image/png";
     }
-
-    if (strcmp(ext, "jpg") == 0 || strcmp(ext, "jpeg") == 0)
+    if (strcmp(szExt, "jpg") == 0 || strcmp(szExt, "jpeg") == 0)
     {
-        free(ext);
+        free(szExt);
         return "image/jpeg";
     }
-
-    if (strcmp(ext, "gif") == 0)
+    if (strcmp(szExt, "gif") == 0)
     {
-        free(ext);
+        free(szExt);
         return "image/gif";
     }
-
-    if (strcmp(ext, "svg") == 0)
+    if (strcmp(szExt, "svg") == 0)
     {
-        free(ext);
+        free(szExt);
         return "image/svg+xml";
     }
-
-    if (strcmp(ext, "ico") == 0)
+    if (strcmp(szExt, "ico") == 0)
     {
-        free(ext);
+        free(szExt);
         return "image/x-icon";
     }
-
-    if (strcmp(ext, "json") == 0)
+    if (strcmp(szExt, "json") == 0)
     {
-        free(ext);
+        free(szExt);
         return "application/json";
     }
-
-    if (strcmp(ext, "txt") == 0)
+    if (strcmp(szExt, "txt") == 0)
     {
-        free(ext);
+        free(szExt);
         return "text/plain";
     }
-
-    if (strcmp(ext, "pdf") == 0)
+    if (strcmp(szExt, "pdf") == 0)
     {
-        free(ext);
+        free(szExt);
         return "application/pdf";
     }
 
-    free(ext);
+    free(szExt);
     return "application/octet-stream";
 }
 
-/////////////////////////////////////////
-/////////////////////////////////////////
-bool isSafePath(const char* URL)
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+bool isSafePath(const char* szURL)
 {
     /*
-    This function is designed to safely validate and prepare a URL path
-    before it is mapped to a filesystem location. Its responsibilities are:
-
-    - Verify the URL pointer is valid and the path is absolute (starts with '/')
-    - Reject platform-specific path separators that could bypass checks ('\')
-    - Reject ASCII control characters and other non-printable bytes (0x00–0x1F and 0x7F)
-    - Decode percent-encoded characters (%XX) exactly once
-    - Reject malformed or partial percent-encoding sequences
-    - Ensure the decoded path remains well-formed after decoding
-    - Normalize the path using stack-based segment processing
-        * Ignore "." segments
-        * Resolve ".." by popping the previous segment
-        * Reject attempts to escape the root directory
-        * Reject empty segments caused by "//"
-    - Reconstruct a canonical, normalized path string
-    - Merge the normalized path with a fixed base directory
-    - Resolve the final filesystem path using realpath()
-    - Verify the resolved path is contained within the base directory
-    - Reject the path if any validation or containment rule is violated
-
-    Only paths that pass all these stages are considered safe for file access.
+        Validates and normalizes a URL path to prevent traversal
+        Ensures resolved filesystem path stays within ROOT
     */
 
-    //============================================================================//
+    if (!szURL || szURL[0] != '/') return false;
 
-    // path must start with '/'
-    if (URL == NULL) return false;
-    if (URL[0] != '/') return false;
+    size_t iLen = strlen(szURL);
+    char* szDecoded = calloc(iLen + 1, 1);
+    if (!szDecoded) return false;
 
-    size_t len = strlen(URL);
+    size_t iOut = 0;
 
-    char* buffer = (char*)calloc(len + 1, 1);
-    if (buffer == NULL) return false;
-
-    size_t i = 0; // index used to fill decoded buffer
-
-
-    //decode percent-encoded characters + basic checks
-    for (size_t x = 0; x < len; x++)
+    for (size_t iX = 0; iX < iLen; iX++)
     {
-        // windows URL not allowed
-        if (URL[x] == '\\') { free(buffer); return false; }
-
-        // reject control characters
-        if ((unsigned char)URL[x] < 0x20 || URL[x] == 0x7F)
+        if (szURL[iX] == '\\') { free(szDecoded); return false; }
+        if ((unsigned char)szURL[iX] < 0x20 || szURL[iX] == 0x7F)
         {
-            free(buffer);
+            free(szDecoded);
             return false;
         }
 
-        // decode %XX
-        if (URL[x] == '%' && (x + 2 < len) &&
-            isHex(URL[x + 1]) && isHex(URL[x + 2]))
+        if (szURL[iX] == '%' && iX + 2 < iLen &&
+            isHex(szURL[iX + 1]) && isHex(szURL[iX + 2]))
         {
-            unsigned char hi = isHex(URL[x + 1]);
-            unsigned char lo = isHex(URL[x + 2]);
-            buffer[i++] = (hi << 4) | lo;
-
-            x += 2;
+            unsigned char iHi = isHex(szURL[iX + 1]);
+            unsigned char iLo = isHex(szURL[iX + 2]);
+            szDecoded[iOut++] = (iHi << 4) | iLo;
+            iX += 2;
             continue;
         }
 
-        // malformed percent encoding
-        if (URL[x] == '%')
-        {
-            free(buffer);
-            return false;
-        }
-
-        // fill the buffer
-        buffer[i++] = URL[x];
+        if (szURL[iX] == '%') { free(szDecoded); return false; }
+        szDecoded[iOut++] = szURL[iX];
     }
 
-    buffer[i] = '\0';
-    size_t bufferLen = i;
+    szDecoded[iOut] = '\0';
 
-    // checks on decoded path (pre-normalization only)
-    if (buffer[0] != '/') { free(buffer); return false; }
+    char* szNormalized = normalizePath(szDecoded);
+    free(szDecoded);
+    if (!szNormalized) return false;
 
-    for (size_t x = 0; x < bufferLen; x++)
+    char* szFullPath = calloc(strlen(szNormalized) + ROOT_LENGTH + 1, 1);
+    if (!szFullPath)
     {
-        if (buffer[x] == '\\') { free(buffer); return false; }
+        free(szNormalized);
+        return false;
+    }
 
-        if (buffer[x] == '/' && x + 1 < bufferLen && buffer[x + 1] == '/')
+    strcpy(szFullPath, ROOT);
+    strcat(szFullPath, szNormalized);
+    free(szNormalized);
+
+    char szResolved[PATH_MAX];
+    if (!realpath(szFullPath, szResolved))
+    {
+        free(szFullPath);
+        return false;
+    }
+
+    static char szResolvedRoot[PATH_MAX];
+    static bool bRootResolved = false;
+
+    if (!bRootResolved)
+    {
+        if (!realpath(ROOT, szResolvedRoot))
         {
-            free(buffer);
+            free(szFullPath);
             return false;
+        }
+        bRootResolved = true;
+    }
+
+    size_t iRootLen = strlen(szResolvedRoot);
+    bool bOk = strncmp(szResolved, szResolvedRoot, iRootLen) == 0 &&
+        (szResolved[iRootLen] == '/' || szResolved[iRootLen] == '\0');
+
+    free(szFullPath);
+    return bOk;
+}
+
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+char* normalizePath(char* szPath)
+{
+    /*
+        Normalizes path segments using a stack-based approach
+        Resolves '.', '..' and rejects root escape attempts
+    */
+
+    Stack stStack;
+    initialize(&stStack, 20, sizeof(char*));
+
+    char* szToken = strtok(szPath, "/");
+    while (szToken)
+    {
+        if (strcmp(szToken, ".") == 0)
+        {
+            szToken = strtok(NULL, "/");
+            continue;
+        }
+
+        if (strcmp(szToken, "..") == 0)
+        {
+            if (isEmpty(&stStack))
+                return NULL;
+            pop(&stStack);
+            szToken = strtok(NULL, "/");
+            continue;
+        }
+
+        push(&stStack, szToken);
+        szToken = strtok(NULL, "/");
+    }
+
+    char** pszItems = (char**)stStack.array;
+    size_t iTotal = 1;
+
+    for (size_t iX = 0; iX < stStack.top; iX++)
+        iTotal += strlen(pszItems[iX]) + 1;
+
+    char* szBuffer = calloc(iTotal + 1, 1);
+    if (!szBuffer) return NULL;
+
+    char* p = szBuffer;
+    for (size_t iX = 0; iX < stStack.top; iX++)
+    {
+        *p++ = '/';
+        size_t iLen = strlen(pszItems[iX]);
+        memcpy(p, pszItems[iX], iLen);
+        p += iLen;
+    }
+
+    return szBuffer;
+}
+
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+bool isHex(char c)
+{
+    /*
+        Checks whether a character is a hexadecimal digit
+        Used for validating percent-encoded URL sequences
+    */
+
+    return (c >= '0' && c <= '9') ||
+        (c >= 'A' && c <= 'F') ||
+        (c >= 'a' && c <= 'f');
+}
+
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+int validateFileAccess(const char* szFilePath, struct stat* outStat)
+{
+    /*
+        Validates file existence, type, and read permissions
+        Maps POSIX errors to HTTP-style status codes
+    */
+
+    struct stat stFile;
+
+    if (stat(szFilePath, &stFile) != 0)
+    {
+        switch (errno)
+        {
+        case ENOENT:
+        case ENOTDIR: return 404;
+        case EACCES:
+        case EPERM:   return 403;
+        case EINVAL:  return 400;
+        case ENAMETOOLONG: return 414;
+        default:      return 500;
         }
     }
 
-    /* ------------------------------------------------ */
-    /* TODO:
-       - Normalize path using stack-based segment handling
-       - Reject empty segments (//)
-       - Handle "." and ".." correctly
-       - Rebuild normalized path
-       - Merge with base directory
-       - realpath() resolution
-       - Verify resolved path stays inside base directory
+    if (!S_ISREG(stFile.st_mode)) return 403;
+    if (!(stFile.st_mode & S_IRUSR)) return 403;
+
+    if (outStat) *outStat = stFile;
+    return 200;
+}
+
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+int openFileReadOnly(const char* szFilePath)
+{
+    /*
+        Opens a file descriptor in read-only mode
+        Uses POSIX open for binary-safe file access
     */
-    /* ------------------------------------------------ */
 
+    return open(szFilePath, O_RDONLY);
+}
 
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+bool sendFileToSocket(int socketFd, int fileFd, off_t fileSize)
+{
+    /*
+        Streams file contents to a socket using buffered I/O
+        Correctly handles partial writes and interruptions
+    */
 
-    free(buffer);
+    char szBuffer[8192];
+    off_t iTotalSent = 0;
+
+    while (iTotalSent < fileSize)
+    {
+        ssize_t iBytesRead = read(fileFd, szBuffer, sizeof(szBuffer));
+        if (iBytesRead <= 0) return false;
+
+        ssize_t iSent = 0;
+        while (iSent < iBytesRead)
+        {
+            ssize_t iN = send(socketFd, szBuffer + iSent,
+                iBytesRead - iSent, 0);
+            if (iN <= 0) return false;
+
+            iSent += iN;
+            iTotalSent += iN;
+        }
+    }
+
     return true;
 }
 
-/////////////////////////////////////////
-/////////////////////////////////////////
-char* normalizePath(char* path)
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+void sendErrorResponse(int socketFd, int statusCode)
 {
-    Stack stack;
-    initialize(&stack, 20, sizeof(char*));
+    /*
+        Sends a minimal HTTP error response to the client
+        Includes status line, headers, and short body
+    */
 
-    char* token = strtok(path, "/");
+    const char* szReason = getReasonPhrase(statusCode);
 
-    while (token != NULL)
-    {
-        if (strcmp(token, ".") == 0)
-        {
-            token = strtok(NULL, "/");
-            continue;
-        }
+    char szBody[64];
+    int iBodyLength = snprintf(
+        szBody, sizeof(szBody),
+        "%d %s\n", statusCode, szReason
+    );
 
-        if (strcmp(token, "..") == 0)
-        {
-            if (isEmpty(&stack))
-                return NULL; // escape root ? reject
+    char szHeaders[256];
+    int iHeaderLength = snprintf(
+        szHeaders, sizeof(szHeaders),
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Length: %d\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        statusCode, szReason, iBodyLength
+    );
 
-            pop(&stack);
-            token = strtok(NULL, "/");
-            continue;
-        }
-
-        push(&stack, token);
-        token = strtok(NULL, "/");
-    }
-
-    free(path);
-    // reconstruction of the path
-
-    char** items = (char**)stack.array;
-    size_t total = 1; // leading '/'
-
-    for (size_t x = 0; x < stack.top; x++)
-    {
-        total += strlen(items[x]) + 1;
-    }
-
-    char* buffer = (char*)calloc(total, sizeof(char));
-    if (buffer == NULL) return NULL;
-    buffer[0] = '/';
-    unsigned i = 1;
-
-    for (int x = 0; x < total; x++)
-    {
-        strcpy(buffer, items[x]);
-        i += strlen(x);
-        buffer[i++] = '/';
-        // to be finished
-    }
-
+    send(socketFd, szHeaders, iHeaderLength, 0);
+    send(socketFd, szBody, iBodyLength, 0);
 }
 
-/////////////////////////////////////////
-/////////////////////////////////////////
-bool isHex(char c)
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+bool isTextFile(const char* mimeType)
 {
-    if (c >= '0' && c <= '9' || c >= 'A' && c <= 'F' || c >= 'a' && c <= 'f') return true;
-    return false;
+    /*
+        Determines whether a MIME type should be treated as text
+        Used to decide charset handling and caching rules
+    */
+
+    if (!mimeType) return false;
+
+    return
+        (
+            strncmp(mimeType, "text/", 5) == 0 ||
+            strcmp(mimeType, "application/json") == 0 ||
+            strcmp(mimeType, "application/javascript") == 0 ||
+            strcmp(mimeType, "application/xml") == 0
+            );
 }
 
-/////////////////////////////////////////
-/////////////////////////////////////////
-int main()
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+const char* getReasonPhrase(int statusCode)
 {
-    bool safe = isSafePath("/images/icons/../home.png");
-    printf("Safe: %s\n", safe ? "yes" : "no");
-    return 0;
+    /*
+        Maps HTTP status codes to reason phrases
+        Used when constructing error responses
+    */
+
+    switch (statusCode)
+    {
+    case 400: return "Bad Request";
+    case 403: return "Forbidden";
+    case 404: return "Not Found";
+    case 500: return "Internal Server Error";
+    default:  return "Error";
+    }
+}
+
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+void logRequest(const char* method, const char* path,
+    int status, off_t bytesSent)
+{
+    /*
+        Logs request and response details for diagnostics
+        Includes method, path, status, and byte count
+    */
+
+    printf(
+        "%s %s -> %d (%jd bytes)\n",
+        method, path, status, (intmax_t)bytesSent
+    );
+}
+
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+void cleanupFileTransfer(int fileFd)
+{
+    /*
+        Cleans up file descriptors after transfer
+        Prevents resource leaks in long-running servers
+    */
+
+    if (fileFd >= 0)
+        close(fileFd);
 }

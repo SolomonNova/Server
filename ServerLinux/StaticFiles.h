@@ -51,13 +51,12 @@ void printFileStats(const FileStats* fs);
 */
 const char* getMIMEType(const char* filePath);
 
-
 /*
     Validates the requested URL path to prevent directory traversal
     Blocks "../", "//", and URL-encoded traversal attempts
 */
 bool isSafePath(const char* URL);
-
+char* normalizePath(char* szPath);
 bool isHex(char c);
 
 /*
@@ -83,19 +82,12 @@ bool sendFileToSocket(int socketFd, int fileFd, off_t fileSize);
     Sends a minimal HTTP error response (403, 404, 500, etc.)
 */
 void sendErrorResponse(int socketFd, int statusCode);
-
+const char* getReasonPhrase(int statusCode); // phrase corrosponding to statusCode 
 /*
     Determines whether a MIME type should be treated as text
     Used for charset and caching decisions
 */
 bool isTextFile(const char* mimeType);
-
-/*
-    Normalizes a raw URL:
-    - Decodes %XX sequences
-    - Removes redundant slashes
-*/
-char* normalizeURL(const char* rawURL);
 
 /*
     Logs request details for debugging or analytics
@@ -110,4 +102,3 @@ void logRequest(const char* method, const char* path, int status, off_t bytesSen
 void cleanupFileTransfer(int fileFd);
 
 #endif
-#pragma once

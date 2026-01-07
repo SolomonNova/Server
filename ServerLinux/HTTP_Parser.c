@@ -16,31 +16,85 @@
 
 /////////////////////////////////////////
 /////////////////////////////////////////
-char** parseMethod(const char* request)
-{
-    unsigned int len = strlen(request);
-    unsigned int endIndex = 0;
 
-    for (int i = 0; i < len; i++)
+int main() {
+    // Write C code here
+    char szSource[] = "/this/is/a/test";
+    char** arrItems = tokenizer(szSource, '/');
+
+    for (size_t iX = 0; arrItems[iX] != NULL; iX++)
     {
-        if (request[i] == '\r')
-        {
-            endIndex = i;
-            break;
-        }
+        printf("%s\n", arrItems[iX]);
     }
 
-    char* buffer = (char*)malloc(endIndex + 1);
+    return 0;
+}
 
-    for (int i = 0; i < endIndex; i++)
-        buffer[i] = request[i];
+REQUEST_INFO* fillRequest(const char* s)
+{
+    REQUEST_INFO* request = (REQUEST_INFO*)calloc(1, sizeof(REQUEST_INFO));
 
-    buffer[endIndex] = '\0';
+    char** methodBuffer = parseMethod(s);
+    if (!methodBuffer) return NULL;
 
-    char** info = tokenizer(buffer);
-    free(buffer);
+    memcpy(request->method, methodBuffer[0], strlen(methodBuffer[0]));
+    memcpy(request->path, methodBuffer[1], strlen(methodBuffer[1]));
+    memcpy(request->version, methodBuffer[2], strlen(methodBuffer[2]));
 
-    return info;
+    request->headers = parseHeaders(s);
+
+    request->body = parseBody(s, request);
+
+    return request;
+}
+
+/////////////////////////////////////////
+/////////////////////////////////////////
+void printRequest(REQUEST_INFO* request)
+{
+    printf("Method: %s\n", request->method);
+    printf("Path: %s\n", request->path);
+    printf("HTTP version: %s\n", request->version);
+
+    for (int x = 0; request->headers->keys[x] != NULL; x++)
+    {
+        printf("%s: ", request->headers->keys[x]);
+        printf("%s\n", request->headers->values[hashFunction(request->headers->keys[x])]);
+    }
+
+    printf("\n\n%s", request->body);
+}
+
+/////////////////////////////////////////
+/////////////////////////////////////////
+PARSE_RESULT parse_request_line(REQUEST_INFO* ri_requestInfo, char* szRequest)
+{
+    /*
+        reads the  http request and parses the request
+        line (ie: method, path, and http version)
+    */
+
+    if (!ri_requestInfo || !szRequest) return NULL;
+
+    // extract the first line
+    char* pLineEnd = strstr(szRequest, "\r\n");
+    if (!pLineEnd) return NULL;
+
+    size_t iLineLength = pLineEnd - szRequest;
+    char* szFirstLine = calloc(iLineLength + 1, 1);
+    if (!szFirstLine) return NULL;
+    memcpy(szFirstLine, szRequest, iLineLength);
+
+    // tokenize
+    char** arrTokens = tokenizer(szFirstLine, ' ');
+    if (!arrTokens)
+    {
+        free(szFirstLine);
+        return NULL;
+    }
+
+
+
 }
 
 /////////////////////////////////////////
@@ -157,42 +211,80 @@ char* parseBody(const char* s, Request* request)
 
 /////////////////////////////////////////
 /////////////////////////////////////////
-char** tokenizer(const char* s)
+char** tokenizer(const char* szSource, const char cDelimiter)
 {
-    // definition in header
+    /*
+        returns a array containing pointers to strings
+        that were seperated by delimiter in the source string.
 
-    int len = strlen(s);
-    int tokenCount = 1;
+        NOTE: strtok() modifies the source string so a duplicate string
+              must be fed to it
+    */
 
-    for (int x = 0; x < len; x++)
-        if (s[x] == ' ') tokenCount++;
+    if (szSource == NULL) return NULL;
 
-    char** res = malloc((tokenCount + 1) * sizeof(char*));
+    size_t iSourceLength = strlen(szSource);
+    char* szSourceDup = calloc(iSourceLength + 1, 1); // duplicate modifiable string, don't use VLA
+    if (!szSourceDup) return NULL;
+    strcpy(szSourceDup, szSource);
 
-    int i = 0;
-    int j = 0;
-    int count = 0;
+    const char szDelimiter[2] = { cDelimiter, '\0' };
+    size_t iCapacity = 8; // capacity of returned array
+    size_t iCount = 0;
 
-    while (j <= len)
+    char** arrTokens = calloc(iCapacity, sizeof(char*));
+    if (!arrTokens) return NULL;
+
+    char* pToken = strtok(szSourceDup, szDelimiter);
+    while (pToken)
     {
-        if (s[j] == ' ' || s[j] == '\0')
+        if (iCount + 1 >= iCapacity)
         {
-            int size = j - i;
-            char* buffer = malloc(size + 1);
+            iCapacity *= 2;
 
-            int k = 0;
-            while (i < j)
-                buffer[k++] = s[i++];
+            char** pTemp = realloc(arrTokens, iCapacity * sizeof(char*));
+            if (!pTemp) goto cleanup;
 
-            buffer[k] = '\0';
-            res[count++] = buffer;
-            i = j + 1;
+            arrTokens = pTemp;
         }
-        j++;
+
+        size_t iBufferLength = strlen(pToken);
+        char* pBuffer = calloc(iBufferLength + 1, 1);
+        if (!pBuffer) goto cleanup;
+
+        memcpy(pBuffer, pToken, iBufferLength);
+        arrTokens[iCount++] = pBuffer;
+
+        pToken = strtok(NULL, szDelimiter);
     }
 
-    res[count] = NULL;
-    return res;
+    arrTokens[iCount] = NULL;
+    char** pTemp = realloc(arrTokens, (iCount + 1) * sizeof(char*)); // realloc to the final size
+    free(szSourceDup);
+
+    return pTemp ? pTemp : arrTokens;
+
+    // cleanup label when memroy allocation fails
+cleanup:
+    for (int iX = 0; iX < iCount; iX++)
+        free(arrTokens[iX]);
+    free(arrTokens);
+    free(szSourceDup);
+    return NULL;
+}
+
+/////////////////////////////////////////
+/////////////////////////////////////////
+void tokenizer_cleanup(char** arrTokens)
+{
+    if (arrTokens == NULL) return;
+
+    for (size_t iX = 0; arrTokens[iX] != NULL; iX++)
+    {
+        free(arrTokens[iX]);
+    }
+
+    free(arrTokens);
 }
 
 /////////////////////////////////////////

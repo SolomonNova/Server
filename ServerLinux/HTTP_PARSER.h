@@ -7,32 +7,57 @@
 #ifndef HTTP_PARSER_H
 #define HTTP_PARSER_H
 
-typedef struct Headers
+typedef struct HEADER_KEY_VALUE
 {
-    char* keys[64];
-    char* values[1024];
-} Headers;
+    char* szKey;
+    char* szValue;
+} HEADER_KEY_VALUE;
 
-typedef struct Request
+typedef struct HEADERS // array of key-value pairs
 {
-    char method[8];
-    char path[1024];
-    char version[8];
-    Headers* headers;
-    char* body;
-} Request;
+    HEADER_KEY_VALUE* hkv_arrEntries;
+    size_t iCount;
+    size_t iCapacity;
+} HEADERS;
 
-char** parseMethod(const char* request);
+typedef struct REQUEST_INFO
+{
+    char* m_szMethod;
+    char* m_szPath;
+    char* m_szVersion;
+    HEADERS* m_h_headers;
+    char* m_body;
+    size_t   m_iBodyLength;
+} REQUEST_INFO;
+
+typedef enum
+{
+    PARSE_SUCCESS = 0,
+    ERR_NULL_CHECK_FAILED,
+    ERR_EMPTY_REQUEST,
+    ERR_INVALID_METHOD,
+    ERR_INVALID_PATH,
+    ERR_INVALID_PROTOCOL,
+    ERR_CALLOC_FAILED
+} PARSE_RESULT;
+
+PARSE_RESULT parse_request_line(REQUEST_INFO* ri_requestInfo, const char* szRequest);
+
+REQUEST_INFO* fillREQUEST_INFO(const char* s);
 Headers* parseHeaders(const char* request);
-char* parseBody(const char* s, Request* request);
+char* parseBody(const char* s, REQUEST_INFO* request);
 
 //============Helper Functions================//
 
-char** tokenizer(const char* s);
+void printREQUEST_INFO(REQUEST_INFO* request);
+
+char** tokenizer(const char* s, const char cDelimiter);
 /*
     Takes a string and returns an array of pointers
     to its substrings that were seperated by a space character ' '.
 */
+
+void tokenizer_cleanup(char** arrItems);
 
 char** getLineKeyValue(const char* s, int i, int j);
 /*
@@ -43,6 +68,9 @@ char** getLineKeyValue(const char* s, int i, int j);
 */
 
 unsigned short hashFunction(const char* s);
+/*
+    Gives integer to be used as a index for a header string
+*/
 
 char* getValue(const char* s, Headers* headers);
 /*
@@ -50,5 +78,9 @@ char* getValue(const char* s, Headers* headers);
 */
 
 char* parseChunckedBody(const char* s, int startIndex);
+/*
+    find the chunk size and make a buffer to store the
+    data for the chunck size then add the buffer to the body string
+*/
 
 #endif
