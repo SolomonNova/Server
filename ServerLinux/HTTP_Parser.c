@@ -4,6 +4,8 @@
     Author: Solomon
 */
 
+#define _POSIX_C_SOURCE 200809L // for strtok_r which is a POSIX function not standard function
+
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -48,8 +50,8 @@ REQUEST_INFO* fillRequest(const char* s)
     return request;
 }
 
-/////////////////////////////////////////
-/////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////
 void printRequest(REQUEST_INFO* request)
 {
     printf("Method: %s\n", request->method);
@@ -65,152 +67,272 @@ void printRequest(REQUEST_INFO* request)
     printf("\n\n%s", request->body);
 }
 
-/////////////////////////////////////////
-/////////////////////////////////////////
-PARSE_RESULT parse_request_line(REQUEST_INFO* ri_requestInfo, char* szRequest)
+//////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////
+PARSE_RESULT parse_request_line(REQUEST_INFO* ri_requestInfo, char* szRequestBuffer)
+{
+    if (!ri_requestInfo || !szRequestBuffer) return ERR_EMPTY_REQUEST;
+
+    ri_requestInfo->m_pRequestStart = szRequestBuffer; // set the pointers in struct
+
+    size_t iReqLength = strlen(szRequestBuffer);
+    // 1. Ensure we only look at the first line
+    char* pLineEnd = strstr(szRequestBuffer, "\r\n");
+    if (!pLineEnd) return ERR_NULL_CHECK_FAILED;
+
+    size_t iOffset = pLineEnd - szRequestBuffer + 2;
+    if (iOffset > iReqLength) return ERR_INVALID_FORMAT;
+
+    ri_requestInfo->m_pHeadersStart = pLineEnd + 2; // set the members of the struct
+
+    // Terminate the first line so strtok doesn't bleed into headers
+    *pLineEnd = '\0';
+
+    char* pSavePtr;
+
+    ri_requestInfo->m_szMethod = strtok_r(szRequestBuffer, " ", &pSavePtr);
+    ri_requestInfo->m_szPath = strtok_r(NULL, " ", &pSavePtr);
+    ri_requestInfo->m_szVersion = strtok_r(NULL, " ", &pSavePtr);
+
+    if (!ri_requestInfo->m_szMethod) return ERR_INVALID_METHOD;
+    if (!ri_requestInfo->m_szPath) return ERR_INVALID_PATH;
+    if (!ri_requestInfo->m_szVersion) return ERR_INVALID_PROTOCOL;
+
+    // no space after version
+    if (strtok_r(NULL, " ", &pSavePtr) != NULL) {
+        return ERR_INVALID_FORMAT; // Too many spaces/parameters
+    }
+
+    *pLineEnd = '\r';
+
+    return PARSE_SUCCESS;
+}
+
+//////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////
+PARSE_RESULT parse_headers(REQUEST_INFO* ri_requestInfo, char* szRequestBuffer)
+{
+    if (!ri_requestInfo || !szRequestBuffer) return ERR_EMPTY_REQUEST;
+
+    char* pRequestLineEnd = strstr(szRequestBuffer, "\r\n");
+    if (!pRequestLineEnd) return ERR_INVALID_FORMAT;
+
+    char* pHeadersStart = pRequestLineEnd + 2;
+    char* pHeadersEnd = strstr(pHeadersStart, "\r\n\r\n");
+    if (!pHeadersEnd) return ERR_INVALID_FORMAT;
+
+    size_t iLength = strlen(pHeadersStart);
+    size_t iOffset = pHeadersEnd - pHeadersStart + 4;
+
+    if (iOffset > iLength) return ERR_INVALID_FORMAT; // safey for illegal acess
+    ri_requestInfo->m_pBodyStart = pHeadersEnd + 4; // fill the struct
+
+    *pHeadersEnd = '\0'; // Seal the header block
+
+
+    char* pCurrentLine = pHeadersStart;
+    HEADERS* h_entries = ri_requestInfo->m_h_headers;
+
+    while (pCurrentLine && *pCurrentLine != '\0') {
+        if (h_entries->iCount >= h_entries->iCapacity) return ERR_OUT_OF_BOUNDS;
+
+        char* pColon = strchr(pCurrentLine, ':');
+        if (!pColon) break; // Or handle as error: invalid header format
+
+        *pColon = '\0';
+        h_entries->hkv_arrEntries[h_entries->iCount].szKey = pCurrentLine;
+
+        // Move to value and skip leading spaces
+        char* pValue = pColon + 1;
+        while (*pValue == ' ') pValue++;
+
+        h_entries->hkv_arrEntries[h_entries->iCount].szValue = pValue;
+
+        char* pLineEnd = strstr(pValue, "\r\n");
+        if (pLineEnd)
+        {
+            *pLineEnd = '\0';
+            pCurrentLine = pLineEnd + 2; // Move to next line
+        }
+
+        else
+        {
+            pCurrentLine = NULL; // End of string
+        }
+
+        h_entries->iCount++;
+    }
+
+    return PARSE_SUCCESS;
+}
+
+//////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////
+PARSE_RESULT parse_body(REQUEST_INFO* ri_requestInfo, char* szRequestBuffer)
 {
     /*
-        reads the  http request and parses the request
-        line (ie: method, path, and http version)
+        This function actually does not parse the body but formats
+        the bytes of the body / extract the bytes from the body with
+        different transfer encoding.
+        The actual parsing depends on "Content-Type" header of the body
+        and will be done later
     */
 
-    if (!ri_requestInfo || !szRequest) return NULL;
+    if (!ri_requestInfo || !szRequestBuffer) return ERR_NULL_CHECK_FAILED;
+    if (!ri_requestInfo->m_pBodyStart) return ERR_INVALID_FORMAT;
 
-    // extract the first line
-    char* pLineEnd = strstr(szRequest, "\r\n");
-    if (!pLineEnd) return NULL;
+    char* szContentLength = NULL;
+    char* szTransferEncoding = NULL;
 
-    size_t iLineLength = pLineEnd - szRequest;
-    char* szFirstLine = calloc(iLineLength + 1, 1);
-    if (!szFirstLine) return NULL;
-    memcpy(szFirstLine, szRequest, iLineLength);
-
-    // tokenize
-    char** arrTokens = tokenizer(szFirstLine, ' ');
-    if (!arrTokens)
+    for (size_t iX = 0; iX < ri_requestInfo->m_h_headers->iCount; iX++)
     {
-        free(szFirstLine);
-        return NULL;
+        if (strcmp(ri_requestInfo->m_h_headers->hkv_arrEntries[iX].szKey, "Content-Length") == 0)
+            szContentLength = ri_requestInfo->m_h_headers->hkv_arrEntries[iX].szValue;
+
+        if (strcmp(ri_requestInfo->m_h_headers->hkv_arrEntries[iX].szKey, "Transfer-Encoding") == 0)
+            szContentLength = ri_requestInfo->m_h_headers->hkv_arrEntries[iX].szValue;
     }
 
 
+    // set the field of structs
+    if (!szContentLength) return ERR_NULL_CHECK_FAILED;
+    size_t iBodyLength = (size_t)(szContentLength);
+    ri_requestInfo->m_iBodyLength = iBodyLength;
 
+    // when encoding is chuncked
+    if (strcmp(szTransferEncoding, "chunked") == 0);
+
+
+
+    return PARSE_SUCCESS;
 }
 
-/////////////////////////////////////////
-/////////////////////////////////////////
-Headers* parseHeaders(const char* request)
+//////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////
+PARSE_RESULT decode_chunked_body(REQUEST_INFO* ri_requestInfo, char* pBodyStart)
 {
-    unsigned int len = strlen(request);
-    int startIndex = -1;
-    int endIndex = -1;
+    if (!ri_requestInfo || !pBodyStart) return ERR_NULL_CHECK_FAILED;
 
-    for (int x = 0; x + 1 < len; x++)
-        if (request[x] == '\r' && request[x + 1] == '\n')
-        {
-            startIndex = x + 2;
-            break;
-        }
+    size_t iCount = 0;
+    size_t iCapacity = 1024;
+    char* pBodyBuffer = calloc(iCapacity, 1);
+    char* pEnd = ri_requestInfo->m_pOriginalRequest + ri_requestInfo->m_iTotalRawBytes;
 
-    if (startIndex == -1) return NULL;
-
-    for (int x = startIndex; x + 3 < len; x++)
-        if (request[x] == '\r' && request[x + 1] == '\n' &&
-            request[x + 2] == '\r' && request[x + 3] == '\n')
-        {
-            endIndex = x - 1;
-            break;
-        }
-
-    if (endIndex == -1) return NULL;
-
-    int i = startIndex;
-    int j = startIndex;
-    int count = 0;
-
-    char*** keysCollection = (char***)calloc(64, sizeof(char**));
-
-    while (j <= endIndex)
+    char* pCurrentByte = pBodyStart;
+    size_t iChunkSize = 0;
+    do
     {
-        if (request[j] == '\r')
+        iChunkSize = 0;
+        int iHexChars = 0;
+
+        while ((pCurrentByte + 1 < pEnd) && *pCurrentByte != '\r')
         {
-            keysCollection[count++] = getLineKeyValue(request, i, j - 1);
-            j += 2;
-            i = j;
-            continue;
+            if (++iHexChars > 16) goto safe_return; // Max 16 hex chars for 64-bit size_t
+
+            if (*pCurrentByte >= '0' && *pCurrentByte <= '9')
+                iChunkSize = 16 * iChunkSize + (*pCurrentByte - '0');
+            else if (*pCurrentByte >= 'A' && *pCurrentByte <= 'F')
+                iChunkSize = 16 * iChunkSize + (10 + (*pCurrentByte - 'A'));
+            else if (*pCurrentByte >= 'a' && *pCurrentByte <= 'f')
+                iChunkSize = 16 * iChunkSize + (10 + (*pCurrentByte - 'a'));
+            else goto safe_return;
+
+            pCurrentByte++;
         }
-        j++;
+
+        // MODIFIED: Ensure we aren't at the very end of the buffer before checking CRLF
+        if (pCurrentByte + 1 >= pEnd) goto safe_return;
+
+        if (iChunkSize == 0) break;
+
+        if (iCount + iChunkSize > 0x00A00000ULL) goto safe_return;
+        while (!(iCount + iChunkSize < iCapacity))
+        {
+            iCapacity *= 2;
+            char* pTempBuffer = realloc(pBodyBuffer, iCapacity);
+            if (!pTempBuffer) { free(pBodyBuffer); return ERR_NULL_CHECK_FAILED; };
+            pBodyBuffer = pTempBuffer;
+        }
+
+        // Verify CRLF after the hex size
+        if (!(*pCurrentByte == '\r' && *(pCurrentByte + 1) == '\n')) goto safe_return;
+        pCurrentByte += 2;
+
+        // We check for iChunkSize + 2 to account for the trailing \r\n
+        if (pCurrentByte + iChunkSize + 2 > pEnd) goto safe_return;
+
+        for (size_t iX = 0; iX < iChunkSize; iX++)
+            pBodyBuffer[iCount++] = *(pCurrentByte++);
+
+        // Verify the mandatory CRLF that must follow every data chunk
+        if (!(*pCurrentByte == '\r' && *(pCurrentByte + 1) == '\n')) goto safe_return;
+        pCurrentByte += 2;
+
+    } while (iChunkSize != 0);
+
+    // Correctly handle the final CRLF of the 0 chunk (0\r\n\r\n)
+    if (pCurrentByte + 1 >= pEnd)
+        goto safe_return;
+
+    // No trailers: immediate empty line
+    if (*pCurrentByte == '\r' && *(pCurrentByte + 1) == '\n')
+    {
+        pCurrentByte += 2;
+        ri_requestInfo->m_pRequestEnd = pCurrentByte;
     }
 
-    Headers* headers = (Headers*)calloc(1, sizeof(Headers));
-
-    for (int x = 0; x < count; x++)
+    else // else executes if there are trailers behind body section
     {
-        char* key = keysCollection[x][0];
-        char* value = keysCollection[x][1];
-
-        headers->keys[x] = key;
-
-        unsigned short index = hashFunction(key);
-        while (headers->values[index] != NULL)
-            index = (index + 1) % 1024;
-
-        headers->values[index] = value;
-    }
-
-    headers->keys[count] = NULL;
-
-    free(keysCollection);
-    return headers;
-}
-
-/////////////////////////////////////////
-/////////////////////////////////////////
-char* parseBody(const char* s, Request* request)
-{
-    int startIndex = 0;
-    int len = (int)strlen(s);
-
-    for (int x = 0; x + 3 < len; x++)
-    {
-        if (s[x] == '\r' && s[x + 1] == '\n' &&
-            s[x + 2] == '\r' && s[x + 3] == '\n')
+        while (1)
         {
-            startIndex = x + 4;
-            break;
-        }
-    }
+            // Need at least 2 bytes to check for CRLF
+            if (pCurrentByte + 1 >= pEnd) goto safe_return;
 
-    char* lenString = getValue("Content-Length", request->headers);
+            // Empty line marks end of trailers
+            if (*pCurrentByte == '\r' && *(pCurrentByte + 1) == '\n')
+            {
+                pCurrentByte += 2;
+                break;
+            }
 
-    if (lenString != NULL)
-    {
-        int bodyLength = 0;
+            // Skip current trailer line until CRLF
+            while (pCurrentByte + 1 < pEnd &&
+                !(*pCurrentByte == '\r' && *(pCurrentByte + 1) == '\n'))
+            {
+                pCurrentByte++;
+            }
 
-        for (int x = 0; lenString[x] != '\0'; x++)
-        {
-            if (lenString[x] < '0' || lenString[x] > '9') break;
-            bodyLength = bodyLength * 10 + (lenString[x] - '0');
+            if (pCurrentByte + 1 >= pEnd) goto safe_return;
+
+            // Consume CRLF of this trailer line
+            pCurrentByte += 2;
         }
 
-        char* buffer = (char*)calloc(bodyLength + 1, sizeof(char));
-
-        for (int i = 0; i < bodyLength; i++)
-            buffer[i] = s[startIndex + i];
-
-        buffer[bodyLength] = '\0';
-        return buffer;
+        ri_requestInfo->m_pRequestEnd = pCurrentByte;
     }
 
-    return parseChunckedBody(s, startIndex);
+
+    char* pTemp = realloc(pBodyBuffer, iCount + 1);
+    if (!pTemp) goto safe_return;
+    pTemp[iCount] = '\0';
+    pBodyBuffer = pTemp;
+
+    ri_requestInfo->m_iBodyLength = iCount;
+    ri_requestInfo->m_szBody = pBodyBuffer;
+
+    return PARSE_SUCCESS;
+
+    safe_return:
+        if (pBodyBuffer) free(pBodyBuffer);
+        return ERR_INVALID_FORMAT;
 }
 
 ////////////////////////////////////////////////////////////
 //==================== HELPER FUNCTIONS ===================//
 ////////////////////////////////////////////////////////////
 
-/////////////////////////////////////////
-/////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////
 char** tokenizer(const char* szSource, const char cDelimiter)
 {
     /*
